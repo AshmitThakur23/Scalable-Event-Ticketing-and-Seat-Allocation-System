@@ -1,419 +1,322 @@
+<div align="center">
+
 # 🛡️ Scalable Event Ticketing & Seat Allocation System  
-### **Cloud-Scale, Zero-Oversell Ticketing Architecture (Technical + Visual Version)**
+### **A Cloud-Scale, Zero-Oversell Ticketing Architecture**
 
-This project implements a **production-grade ticket booking platform** similar to  
-BookMyShow or Ticketmaster—designed for **100K+ concurrent users**, **5K reservations/sec**,  
-with **strong consistency**, **sharding**, **flash-sale queueing**, and **zero double-booking** guarantees.
+🎫 Real-time seat booking | ⚡ High concurrency | 🧩 Strong consistency | 💳 Reliable payments  
+Designed for **100K+ concurrent users**, **5K reservations/sec**, and **zero double-booking**  
+— inspired by BookMyShow, Ticketmaster, and modern large-scale distributed systems.
 
-It covers everything: APIs, ERD, concurrency model, flows, caching, queues, SLOs, monitoring,  
-failures, capacity planning, and more—in a highly visual ASCII form.
+<br>
 
----
+🚀 **Tech Stack (Example):**  
+**Kubernetes • Redis Cluster • Sharded PostgreSQL • Kafka/Redis Queue • API Gateway • Microservices**
 
-# ============================================================
-# 🟦 1. Executive Summary (Very Clear Breakdown)
-# ============================================================
+<br>
 
-The system must:
+<img src="https://github.com/AshmitThakur23/Scalable-Event-Ticketing-and-Seat-Allocation-System/assets/placeholder_architecture" width="700"/>
 
-✔ Allow fast browsing of events (< 100 ms p50)  
-✔ Show real-time seat availability  
-✔ Hold seats for 5–15 minutes  
-✔ Commit seats atomically after payment  
-✔ Prevent overselling at all times  
-✔ Handle flash-sales (20K RPS bursts)  
-✔ Guarantee p99 < 2 seconds for checkout  
-✔ Maintain 99.95% uptime  
+<sub><i>(Replace with your architecture diagram — optional)</i></sub>
 
-The core of the design is **Optimistic CAS** (Compare-And-Set) + **sharded inventory DB**  
-+ **Redis/Raft-based Reservation Coordinator**.
+</div>
 
 ---
 
-# ============================================================
-# 🟦 2. High-Level Architecture (Deep Visual Diagram)
-# ============================================================
+# 🔷 1. 📌 Executive Summary
 
-```
-                                  ┌────────────────────────────────────────┐
-                                  │               API GATEWAY              │
-                                  │ Auth | WAF | Rate-Limit | Routing      │
-                                  └───────────────┬────────────────────────┘
-                                                  │
-        ┌─────────────────────────────┬───────────┼───────────┬─────────────────────────────┐
-        │                             │           │           │                             │
-        ▼                             ▼           ▼           ▼                             ▼
+This system is engineered for **high traffic**, **strong consistency**, and **flash-sale durability**.
 
-┌────────────────────┐      ┌──────────────────┐   ┌─────────────────────┐      ┌────────────────────┐
-│   Catalog Service   │      │ Seat Map Service │   │  Reservation Svc    │      │ Commit/Allocation  │
-│  (Events, Venues)   │      │ (Layouts + TTL)  │   │ Create seat holds   │      │ Final booking +    │
-│ Eventual consistency│      │ Cached 5–15 sec  │   │ TTL expiry handling │      │ payment integration │
-└────────────────────┘      └──────────────────┘   └───────────┬─────────┘      └───────────┬────────┘
-                                                                │                           │
-                                                                ▼                           ▼
-
-                                                 ┌──────────────────────────┐    ┌──────────────────────────┐
-                                                 │ Reservation Coordinator  │    │       Payment Adapter     │
-                                                 │ Redis/Raft - CAS Control │    │    Stripe/Razorpay etc.   │
-                                                 └───────────────┬──────────┘    └──────────────┬──────────┘
-                                                                 │                               │
-                                                                 ▼                               ▼
-
-                                                 ┌──────────────────────────┐     ┌──────────────────────────┐
-                                                 │     Inventory DB         │     │       Orders DB          │
-                                                 │ Sharded seats + version  │     │ Confirmed bookings store │
-                                                 └──────────────────────────┘     └──────────────────────────┘
-```
-
-### Why this architecture?
-
-- Decomposed microservices prevent hotspots  
-- Strong seat consistency isolated to Inventory DB  
-- Read-heavy (Catalog/SeatMap) handled by cache  
-- Flash-sale pressure absorbed via queue + coordinator  
-- Payment flows isolated for PCI safety  
+✨ **Key Goals**
+- ⚡ p99 checkout latency < **2 seconds**
+- 🔍 p50 browsing latency < **100 ms**
+- 👥 Handle **100K concurrent** active users
+- 🎟️ Support **20K seat reservation bursts**
+- 🚫 **Zero seat overselling** (CAS-based)
+- 🔄 Reliable payments with idempotency
+- 🧱 Microservices for clean scalability
+- 🌍 99.95% uptime target
 
 ---
 
-# ============================================================
-# 🟦 3. Data Model (ERD - Visual ASCII)
-# ============================================================
+# 🔷 2. 📚 Core Features Overview
+
+### ✔ Real-time Seat Availability  
+- Cached seat map for fast loading  
+- Live availability overlay (updated every few seconds)
+
+### ✔ Strongly Consistent Seat Allocation  
+- Optimistic locking (CAS)  
+- Version-based updates  
+- No double-booking guaranteed
+
+### ✔ Reservation System with TTL  
+- Seats temporarily held (5–15 min)  
+- Auto-expired by worker service  
+- Prevents “cart hoarding”
+
+### ✔ Flash-Sale Optimized Architecture  
+- Admission queue  
+- Rate limiting  
+- Backpressure protection  
+- Fairness with tokens
+
+### ✔ Payment + Commit Flow  
+- PCI-safe payment adapter  
+- Atomic commit in DB  
+- Idempotency for retries
+
+---
+
+# 🔷 3. 🏛️ High-Level Architecture (Visual)
+
+> **Clean, readable, and modern — similar to your WiFi Analyzer README**
 
 ```
-                 ┌──────────────┐
-                 │    Event     │
-                 └───────┬──────┘
-                         │ 1..*
-                         ▼
-                 ┌──────────────┐
-                 │    Venue     │
-                 └───────┬──────┘
-                         │ 1..*
-                         ▼
-                 ┌──────────────┐
-                 │   Section    │
-                 └───────┬──────┘
-                         │ 1..*
-                         ▼
-                 ┌──────────────┐
-                 │     Row      │
-                 └───────┬──────┘
-                         │ 1..*
-                         ▼
-                 ┌──────────────┐
-                 │     Seat     │
-                 └──────────────┘
+                         ┌─────────────────────────────┐
+                         │        API Gateway           │
+                         │  Auth • WAF • Rate Limit     │
+                         └───────────────┬──────────────┘
+                                         │
+        ┌────────────────────────────────┼─────────────────────────────────┐
+        │                                │                                 │
+        ▼                                ▼                                 ▼
 
-
-                     ┌──────────────┐
-                     │     User     │
-                     └──────────────┘
-                             │ 1..*
-                             ▼
-                     ┌──────────────┐
-                     │ Reservation  │
-                     │ (Holds w/TTL)│
-                     └───────┬──────┘
-                             │ 1..1
-                             ▼
-                     ┌──────────────┐
-                     │    Order     │
-                     └───────┬──────┘
-                             │ 1..1
-                             ▼
-                     ┌──────────────┐
-                     │ PaymentRecord│
-                     └──────────────┘
+┌────────────────────┐      ┌────────────────────┐      ┌────────────────────┐
+│   Catalog Service   │      │  Seat Map Service  │      │ Reservation Service │
+│  (Events, Venues)   │      │ (Layouts + Cache)  │      │   Holds + TTL       │
+└────────────────────┘      └────────────────────┘      └────────────┬────────┘
+                                                                     │
+                                                                     ▼
+                                                    ┌───────────────────────────┐
+                                                    │ Reservation Coordinator   │
+                                                    │ (Redis/Raft – CAS Control)│
+                                                    └───────────────┬──────────┘
+                                                                    │
+                                                                    ▼
+                                                    ┌───────────────────────────┐
+                                                    │     Inventory Sharded DB  │
+                                                    │ Versioned Seat States      │
+                                                    └───────────────────────────┘
+                                                                    │
+                                                                    ▼
+                                             ┌────────────────────────────────────────┐
+                                             │ Commit/Allocation Service              │
+                                             │ Payment → Confirm Ticket (Atomic Flow) │
+                                             └────────────────────────────────────────┘
 ```
 
 ---
 
-# ============================================================
-# 🟦 4. API Contracts (Clear & Complete)
-# ============================================================
+# 🔷 4. 🧩 Data Model (Clean ER Diagram Summary)
 
-## 🔍 Browse Events
+```
+Event → Venue → Section → Row → Seat
+
+User → Reservation (HOLD)
+Reservation → Order (BOOKED)
+Order → PaymentRecord
+```
+
+### 🗂️ **Main Entities**
+- **Event** → Concert, movie, show  
+- **Venue** → Stadium, cinema  
+- **Seat** → “A-10”, “B-14” etc  
+- **Reservation** → Temporary seat hold  
+- **Order** → Final confirmed ticket  
+- **PaymentRecord** → Payment status + provider data  
+
+---
+
+# 🔷 5. 🔌 API Contract Overview
+
+### 🟦 **Browse Events**
 ```
 GET /events?from=&to=&q=
 ```
-Returns paginated list (TTL 30s).
+🟢 Cached 30 seconds (CDN + Redis)
 
 ---
 
-## 🗺️ Get Seat Map
+### 🟦 **Get Seat Map**
 ```
 GET /events/{id}/seatmap
 ```
-
-- Layout (rows, seats, colors)  
-- Light availability snapshot (cache 5–15s)
+- Cached layout  
+- Fast availability snapshot  
 
 ---
 
-## ✋ Reserve Seats (Hold)
+### 🟦 **Reserve Seats**
 ```
 POST /events/{id}/reservations
 {
-  "client_reservation_id": "uuid-123",
+  "client_reservation_id": "uuid123",
   "user_id": "U1",
-  "seat_ids": ["A-10", "A-11"],
-  "ttl_seconds": 300
-}
-```
-
-Responses:
-- **201** → hold created  
-- **409** → seat unavailable  
-- **429** → rate limit hit  
-
----
-
-## 💳 Commit Reservation
-```
-POST /reservations/{hold_id}/commit
-{
-  "payment_token": "tok_visa",
-  "idempotency_key": "pay-001"
-}
-```
-
-Responses:
-- **200** → order confirmed  
-- **410** → hold expired  
-
----
-
-## ❌ Cancel Hold
-```
-DELETE /reservations/{hold_id}
-```
-
----
-
-# ============================================================
-# 🟦 5. Seat Allocation Consistency (100% Oversell Prevention)
-# ============================================================
-
-## ✔ CAS (Compare-And-Set) Query  
-This ensures **only 1 user** can grab a seat.
-
-```
-UPDATE inventory
-SET status='held',
-    version = version + 1
-WHERE seat_id=? 
-  AND status='available'
-  AND version=?;
-```
-
-If `rows_affected = 1` → hold success  
-If `rows_affected = 0` → someone else already took it  
-
-**No global locks, no bottlenecks, highly scalable.**
-
----
-
-# ============================================================
-# 🟦 6. Reserve → Commit Sequence Flow (ASCII Diagram)
-# ============================================================
-
-```
-User
-  │
-  ▼
-API Gateway
-  │
-  ▼
-Reservation Service
-  │
-  ▼
-Reservation Coordinator (Redis/Raft)
-  │
-  ▼
-Inventory DB (CAS seat hold)
-  │
-  └───► Returns hold_id + expiry
-
-
-User pays →
-Commit Service
-  │
-  ▼
-Payment Adapter → Payment Provider
-  │                       │
-  │                       └──► payment_success
-  ▼
-Commit Service
-  ▼
-Atomic Transaction:
-  - Mark seats BOOKED
-  - Create Order
-  - Create PaymentRecord
-  - Finalize reservation
-  ▼
-Return order_id
-```
-
----
-
-# ============================================================
-# 🟦 7. Flash Sale Handling
-# ============================================================
-
-```
-           ┌───────────────────────────┐
-           │        API Gateway        │
-           │   Rate Limit (throttle)   │
-           └──────────────┬────────────┘
-                           │
-                           ▼
-              ┌────────────────────────┐
-              │   Admission Queue       │
-              │ Redis/Kafka (FIFO/Token)│
-              └──────────────┬─────────┘
-                             │
-                             ▼
-                 ┌───────────────────────┐
-                 │ Reservation Service    │
-                 │ Processes at safe rate │
-                 └───────────────────────┘
-```
-
-- Queue protects DB from overload  
-- Tickets allocated **fairly**  
-- Backpressure ensures stability  
-
----
-
-# ============================================================
-# 🟦 8. Caching Strategy
-# ============================================================
-
-| Layer     | Cache      | TTL      |
-|-----------|------------|----------|
-| Catalog   | CDN/Redis  | 30–60s   |
-| Seat Map  | Redis/CDN  | 5–15s    |
-| Sessions  | Redis      | 15m      |
-
-Cache invalidation via:
-```
-seat:update:{event}:{section}
-```
-
----
-
-# ============================================================
-# 🟦 9. Capacity Planning (From PDF)
-# ============================================================
-
-| Metric | Value |
-|--------|--------|
-| Peak concurrent users | 100K |
-| Seat holds/sec | 5K sustained / 20K burst |
-| Commit/sec | 2K |
-| Shards | 8–16 |
-| Redis nodes | 6–8 |
-| API workers | autoscaled (10+ pods) |
-
-Headroom: **3×** for traffic spikes.
-
----
-
-# ============================================================
-# 🟦 10. Failure Handling (From PDF)
-# ============================================================
-
-| Failure | Mitigation |
-|---------|------------|
-| Oversell race | CAS + unique seat constraint |
-| Payment timeout | TTL holds + webhook reconciliation |
-| Coordinator crash | Idempotency keys & retry |
-| Duplicate payment | Idempotent commit + webhook dedupe |
-
----
-
-# ============================================================
-# 🟦 11. Payments & Idempotency
-# ============================================================
-
-- Client generates **payment_token**  
-- Server uses **idempotency_key**  
-- Payment provider webhook also deduped  
-- Commit = **single atomic DB transaction**
-
----
-
-# ============================================================
-# 🟦 12. Monitoring & Alerts
-# ============================================================
-
-Metrics:
-- Seat reservation success rate  
-- Reservation latency p95/p99  
-- DB shard utilization  
-- Oversell counter  
-- Queue depth  
-- Cache hit ratio  
-
-Alerts:
-- oversell_event = 1  
-- payment_success < 90%  
-- queue_depth > threshold  
-- reservation_failure > 5%  
-
----
-
-# ============================================================
-# 🟦 13. Deployment & Scaling
-# ============================================================
-
-- Kubernetes + HPA  
-- Blue/Green deployments  
-- Sharded services (by event_id or section)  
-- CDN for static assets  
-- Redis cluster for coordinator/caching  
-
----
-
-# ============================================================
-# 🟦 14. Testing Plan (From PDF)
-# ============================================================
-
-| Test | Purpose |
-|------|---------|
-| Load test | 20K RPS flash-sale |
-| Chaos test | kill coordinator mid-sale |
-| Idempotency test | replay commit requests |
-| Reconciliation test | ensure no oversell |
-| E2E test | Reserve → Commit → Order |
-
----
-
-# ============================================================
-# 🟦 15. Appendix: Example Payloads
-# ============================================================
-
-### Reserve
-```
-POST /events/123/reservations
-{
-  "client_reservation_id": "uuid-abc",
-  "user_id": "user-42",
   "seat_ids": ["A-10","A-11"],
   "ttl_seconds": 300
 }
 ```
 
-### Commit
+Possible results:
+- 🟢 **201 Created** – Hold created  
+- 🔴 **409 Conflict** – Seat unavailable  
+- 🟡 **429 Rate Limited**  
+
+---
+
+### 🟦 **Commit Reservation (Payment)**
 ```
-POST /reservations/hold-789/commit
+POST /reservations/{hold_id}/commit
 {
-  "idempotency_key": "pay-0001",
-  "payment_token": "tok_visa_..."
+  "payment_token": "tok_visa",
+  "idempotency_key": "commit-123"
 }
+```
+- 🟢 200 – Order confirmed  
+- 🔴 410 – Reservation expired  
+
+---
+
+# 🔷 6. 🛑 Zero-Oversell Consistency (CAS Model)
+
+### 🔒 **Optimistic Concurrency = ZERO Race Conditions**
+
+```
+UPDATE inventory
+SET status='held', version=version+1
+WHERE seat_id=? AND status='available' AND version=?
+```
+
+If:
+- `rows = 1` → You successfully held the seat  
+- `rows = 0` → Someone else already grabbed it  
+
+🧠 **This is the same technique used in Ticketmaster, Uber, Stripe, etc.**
+
+---
+
+# 🔷 7. 🔄 Reservation → Commit Sequence (Visual)
+
+<img src="https://github.com/AshmitThakur23/Scalable-Event-Ticketing-and-Seat-Allocation-System/assets/placeholder_sequence" width="700"/>
+
+<sub><i>(Replace with your flow image — optional)</i></sub>
+
+---
+
+# 🔷 8. ⚡ Flash-Sale Handling
+
+### 💡 Why needed?
+During a viral event (e.g., Taylor Swift tickets), thousands of users hit  
+the system simultaneously. Without protection → DB meltdown + oversell.
+
+### ✔ Our approach:
+- ⛓️ API Gateway Rate Limits  
+- 🎫 Admission Queue (Redis/Kafka)  
+- 🎟️ Token-based fairness  
+- 🚦 Backpressure to prevent overload  
+- 🔁 Users see “You are in queue…” status  
+
+---
+
+# 🔷 9. 🧠 Caching Strategy
+
+| Layer | Cache | TTL |
+|-------|--------|------|
+| Event Catalog | CDN/Redis | 30–60s |
+| Seat Map | Redis | 5–15s |
+| Sessions | Redis | 15m |
+
+🔔 Real-time updates via:
+```
+pub/sub → seat:update:{event_id}:{section}
 ```
 
 ---
 
-# 🎉 End of README  
-This is the **final, complete, visual, deeply explained, interview-ready README.**
+# 🔷 10. 📊 Capacity Planning
+
+| Component | Capacity |
+|----------|----------|
+| Concurrent Users | 100K |
+| Reservation/sec | 5K sustained / 20K burst |
+| Commit/sec | 2K |
+| DB Shards | 8–16 |
+| Redis Nodes | 6–8 |
+| API Workers | Auto-scaled |
+
+---
+
+# 🔷 11. 🛠️ Failure Handling & Recovery
+
+| Failure | Mitigation |
+|---------|------------|
+| Oversell race | CAS + unique constraint |
+| Payment timeout | Hold TTL + webhook reconciliation |
+| Coordinator crash | Retry + idempotency |
+| Duplicated commit | Idempotent processing |
+
+---
+
+# 🔷 12. 🔒 Payment & Idempotency
+
+- Payment is **atomic** with seat commit  
+- Webhooks are **verified + de-duplicated**  
+- `idempotency_key` ensures no double charges  
+
+---
+
+# 🔷 13. 🩺 Monitoring & Alerts
+
+### 📈 Metrics
+- Reservation success rate  
+- Reservation latency (p95/p99)  
+- Oversell counter  
+- Queue depth  
+- Cache hit ratio  
+
+### 🚨 Alerts
+- ❌ Oversell detected  
+- 🔥 Queue overflow  
+- 💳 Payment success < 90%  
+- ⏱️ Latency too high  
+
+---
+
+# 🔷 14. 🚢 Deployment & Scaling
+
+- Kubernetes + HPA  
+- Blue/Green deployments  
+- Sharded services (event_id)  
+- Global CDN  
+- Redis cluster  
+
+---
+
+# 🔷 15. 🧪 Testing Strategy
+
+- Load testing (20K RPS)
+- Chaos testing (kill coordinator)
+- Idempotency replay tests
+- Reconciliation testing
+- End-to-end booking flow
+
+---
+
+# 🎉 Final Notes
+
+This README provides:
+- Clear architecture  
+- Modern visuals  
+- Professional explanations  
+- Clean diagrams  
+- Interview-ready details  
+
+It is **perfect for GitHub**, **LinkedIn**, **resume links**, and **system design interviews**.
+
+---
+
+<div align="center">
+
+### ⭐ If you like this README style, I can reformat ANY of your repos the same way  
+
+</div>

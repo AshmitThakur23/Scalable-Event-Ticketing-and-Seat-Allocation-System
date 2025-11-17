@@ -199,7 +199,6 @@ If:
 
 <img src="https://github.com/AshmitThakur23/Scalable-Event-Ticketing-and-Seat-Allocation-System/assets/placeholder_sequence" width="700"/>
 
-<sub><i>(Replace with your flow image — optional)</i></sub>
 
 ---
 

@@ -1727,7 +1727,880 @@ Trace Example:
 ```
                     ╱╲
                    ╱  ╲
-                  ╱ E2E╲          (10%)
+                  ╱ E2E╲          (10% - End-to-End Tests)
                  ╱──────╲
                 ╱        ╲
-               
+               ╱Integration╲      (30% - Integration Tests)
+              ╱────────────╲
+             ╱              ╲
+            ╱  Unit Tests    ╲    (60% - Unit Tests)
+           ╱──────────────────╲
+          ╱____________________╲
+```
+
+### 🧩 **Test Categories**
+
+#### 1️⃣ **Unit Tests** (60%)
+```python
+# Example: Testing CAS logic
+def test_optimistic_locking_success():
+    seat = create_test_seat(status='AVAILABLE', version=1)
+    result = reserve_seat(seat.id, user_id=123, expected_version=1)
+    
+    assert result.success == True
+    assert seat.status == 'HELD'
+    assert seat.version == 2
+
+def test_optimistic_locking_conflict():
+    seat = create_test_seat(status='AVAILABLE', version=1)
+    
+    # Simulate concurrent update (version changed)
+    update_seat_version(seat.id, version=2)
+    
+    result = reserve_seat(seat.id, user_id=123, expected_version=1)
+    
+    assert result.success == False
+    assert result.error == 'version_mismatch'
+```
+
+**Coverage Target**: > 80%
+
+#### 2️⃣ **Integration Tests** (30%)
+```python
+@pytest.mark.integration
+def test_reservation_to_payment_flow():
+    # Create event and seats
+    event = create_test_event()
+    seats = create_test_seats(event.id, count=5)
+    
+    # Step 1: Reserve seats
+    response = api_client.post(f'/events/{event.id}/reservations', {
+        'seat_ids': [seats[0].id, seats[1].id],
+        'ttl_seconds': 300
+    })
+    assert response.status_code == 201
+    reservation_id = response.json()['reservation_id']
+    
+    # Step 2: Process payment
+    payment_response = api_client.post(
+        f'/reservations/{reservation_id}/commit',
+        {'payment_method_id': 'pm_test_card'}
+    )
+    assert payment_response.status_code == 200
+    
+    # Step 3: Verify seats are booked
+    seat_status = get_seat_status([seats[0].id, seats[1].id])
+    assert all(s.status == 'BOOKED' for s in seat_status)
+```
+
+#### 3️⃣ **End-to-End Tests** (10%)
+```javascript
+// Example: Cypress E2E test
+describe('Complete Booking Flow', () => {
+  it('should book tickets successfully', () => {
+    // Login
+    cy.login('user@example.com', 'password123');
+    
+    // Browse events
+    cy.visit('/events');
+    cy.contains('Taylor Swift').click();
+    
+    // Select seats
+    cy.get('[data-seat-id="A-10"]').click();
+    cy.get('[data-seat-id="A-11"]').click();
+    cy.contains('Reserve Seats').click();
+    
+    // Complete payment
+    cy.get('input[name="card-number"]').type('4242424242424242');
+    cy.get('input[name="expiry"]').type('12/25');
+    cy.get('input[name="cvc"]').type('123');
+    cy.contains('Complete Purchase').click();
+    
+    // Verify confirmation
+    cy.contains('Booking Confirmed').should('be.visible');
+    cy.get('[data-testid="ticket-qr"]').should('exist');
+  });
+});
+```
+
+### 🔥 **Load Testing**
+
+```yaml
+Tool: K6 (Grafana)
+
+Scenarios:
+  1. Browse Events:
+     - Virtual Users: 10,000
+     - Duration: 5 minutes
+     - Expected p95: < 200ms
+     
+  2. Reserve Seats (Flash Sale):
+     - Virtual Users: 50,000
+     - Ramp-up: 30 seconds
+     - Duration: 2 minutes
+     - Expected: 20K req/sec peak
+     - Success rate: > 80%
+     
+  3. Payment Processing:
+     - Virtual Users: 5,000
+     - Duration: 10 minutes
+     - Expected p99: < 2s
+     - Success rate: > 95%
+
+Sample K6 Script:
+```
+
+```javascript
+import http from 'k6/http';
+import { check, sleep } from 'k6';
+
+export let options = {
+  stages: [
+    { duration: '30s', target: 10000 },  // Ramp up
+    { duration: '2m', target: 50000 },   // Peak load
+    { duration: '30s', target: 0 },      // Ramp down
+  ],
+  thresholds: {
+    http_req_duration: ['p95<500', 'p99<2000'],
+    http_req_failed: ['rate<0.05'],
+  },
+};
+
+export default function () {
+  // Reserve seats
+  const payload = JSON.stringify({
+    client_reservation_id: `${__VU}-${__ITER}`,
+    seat_ids: [1001, 1002],
+    ttl_seconds: 300,
+  });
+  
+  const response = http.post(
+    'https://api.example.com/events/12345/reservations',
+    payload,
+    { headers: { 'Content-Type': 'application/json' } }
+  );
+  
+  check(response, {
+    'status is 201': (r) => r.status === 201,
+    'reservation created': (r) => r.json('reservation_id') !== undefined,
+  });
+  
+  sleep(1);
+}
+```
+
+### 🧨 **Chaos Engineering**
+
+```yaml
+Tool: Chaos Mesh / Litmus
+
+Experiments:
+  1. Pod Failure:
+     - Kill random service pods
+     - Expected: Auto-recovery via Kubernetes
+     - Downtime: < 30 seconds
+     
+  2. Network Latency:
+     - Inject 500ms delay to database
+     - Expected: Graceful degradation
+     - User impact: Minimal
+     
+  3. Database Failover:
+     - Terminate primary database node
+     - Expected: Automatic failover to replica
+     - Downtime: < 1 minute
+     
+  4. Cache Flush:
+     - Clear all Redis cache
+     - Expected: Performance degradation (no errors)
+     - Recovery: Auto-repopulation
+     
+  5. Payment Gateway Timeout:
+     - Simulate gateway unavailability
+     - Expected: Retry mechanism + user notification
+```
+
+### ✅ **Contract Testing**
+
+```yaml
+Tool: Pact
+
+Purpose: Ensure API contract compatibility
+
+Example:
+  Consumer: Frontend App
+  Provider: Reservation Service
+  
+  Contract:
+    - POST /reservations
+      Request: { seat_ids: [int], ttl_seconds: int }
+      Response: { reservation_id: string, expires_at: datetime }
+```
+
+---
+
+## 🚀 Deployment Architecture
+
+### ☸️ **Kubernetes Deployment**
+
+```yaml
+# reservation-service-deployment.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: reservation-service
+  namespace: ticketing-prod
+spec:
+  replicas: 5
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 2
+      maxUnavailable: 1
+  selector:
+    matchLabels:
+      app: reservation-service
+  template:
+    metadata:
+      labels:
+        app: reservation-service
+        version: v1.5.2
+    spec:
+      containers:
+      - name: reservation-service
+        image: ticketing/reservation-service:v1.5.2
+        ports:
+        - containerPort: 8080
+        env:
+        - name: DATABASE_URL
+          valueFrom:
+            secretKeyRef:
+              name: db-credentials
+              key: url
+        - name: REDIS_URL
+          valueFrom:
+            configMapKeyRef:
+              name: cache-config
+              key: redis-url
+        resources:
+          requests:
+            memory: "512Mi"
+            cpu: "500m"
+          limits:
+            memory: "1Gi"
+            cpu: "1000m"
+        livenessProbe:
+          httpGet:
+            path: /health/live
+            port: 8080
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /health/ready
+            port: 8080
+          initialDelaySeconds: 10
+          periodSeconds: 5
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: reservation-service-hpa
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: reservation-service
+  minReplicas: 5
+  maxReplicas: 30
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 75
+  - type: Resource
+    resource:
+      name: memory
+      target:
+        type: Utilization
+        averageUtilization: 80
+  behavior:
+    scaleUp:
+      stabilizationWindowSeconds: 60
+      policies:
+      - type: Percent
+        value: 100
+        periodSeconds: 30
+    scaleDown:
+      stabilizationWindowSeconds: 300
+      policies:
+      - type: Pods
+        value: 2
+        periodSeconds: 60
+```
+
+### 🔄 **CI/CD Pipeline**
+
+```yaml
+# .github/workflows/deploy.yml
+name: Deploy to Production
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'services/**'
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      
+      - name: Run Unit Tests
+        run: |
+          npm install
+          npm run test:unit
+          
+      - name: Run Integration Tests
+        run: npm run test:integration
+        
+      - name: Code Coverage
+        run: npm run coverage
+        
+  build:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      
+      - name: Build Docker Image
+        run: |
+          docker build -t ticketing/reservation-service:${{ github.sha }} .
+          
+      - name: Security Scan
+        run: |
+          trivy image ticketing/reservation-service:${{ github.sha }}
+          
+      - name: Push to Registry
+        run: |
+          docker push ticketing/reservation-service:${{ github.sha }}
+          
+  deploy-staging:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Deploy to Staging
+        run: |
+          kubectl set image deployment/reservation-service \
+            reservation-service=ticketing/reservation-service:${{ github.sha }} \
+            -n ticketing-staging
+            
+      - name: Run E2E Tests
+        run: npm run test:e2e:staging
+        
+  deploy-production:
+    needs: deploy-staging
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - name: Blue-Green Deployment
+        run: |
+          # Deploy to green environment
+          kubectl apply -f k8s/green-deployment.yaml
+          
+          # Wait for health checks
+          kubectl wait --for=condition=ready pod \
+            -l version=green -n ticketing-prod --timeout=300s
+          
+          # Switch traffic
+          kubectl patch service reservation-service \
+            -p '{"spec":{"selector":{"version":"green"}}}'
+          
+          # Monitor for 5 minutes
+          sleep 300
+          
+          # If successful, delete blue
+          kubectl delete deployment reservation-service-blue
+```
+
+### 🔵🟢 **Blue-Green Deployment**
+
+```
+Current State (Blue Active):
+┌─────────────────────────────────────────┐
+│ Load Balancer                           │
+│ Routes 100% traffic to BLUE             │
+└──────────────┬──────────────────────────┘
+               │
+               ▼
+┌──────────────────────┐  ┌──────────────┐
+│ BLUE (v1.5.1) ✅     │  │ GREEN (idle) │
+│ • Active             │  │ • Standby    │
+│ • Serving traffic    │  │              │
+└──────────────────────┘  └──────────────┘
+
+Deployment Step 1 (Deploy Green):
+┌─────────────────────────────────────────┐
+│ Load Balancer                           │
+│ Routes 100% traffic to BLUE             │
+└──────────────┬──────────────────────────┘
+               │
+               ▼
+┌──────────────────────┐  ┌──────────────────────┐
+│ BLUE (v1.5.1) ✅     │  │ GREEN (v1.5.2) 🆕    │
+│ • Active             │  │ • Deploying          │
+│ • Serving traffic    │  │ • Health checks      │
+└──────────────────────┘  └──────────────────────┘
+
+Deployment Step 2 (Switch Traffic):
+┌─────────────────────────────────────────┐
+│ Load Balancer                           │
+│ Routes 100% traffic to GREEN ✅         │
+└──────────────────────────────┬──────────┘
+                               │
+                               ▼
+┌──────────────────────┐  ┌──────────────────────┐
+│ BLUE (v1.5.1)        │  │ GREEN (v1.5.2) ✅    │
+│ • Standby (rollback) │  │ • Active             │
+│ • Can rollback       │  │ • Serving traffic    │
+└──────────────────────┘  └──────────────────────┘
+
+If GREEN fails → Instant rollback to BLUE
+If GREEN succeeds → Delete BLUE after 30 min
+```
+
+### 🗄️ **Database Migration Strategy**
+
+```python
+# Using Alembic for migrations
+# migrations/versions/001_add_version_column.py
+
+def upgrade():
+    # Add version column with default value
+    op.add_column('seats', 
+        sa.Column('version', sa.BigInteger(), 
+                  nullable=False, 
+                  server_default='0'))
+    
+    # Create index
+    op.create_index('idx_seat_version', 'seats', ['id', 'version'])
+
+def downgrade():
+    op.drop_index('idx_seat_version')
+    op.drop_column('seats', 'version')
+```
+
+**Migration Process:**
+1. Deploy backward-compatible code
+2. Run migration script
+3. Deploy new code using new schema
+4. Monitor for 24 hours
+5. Remove backward-compatibility code
+
+---
+
+## 🔐 Security Measures
+
+### 🛡️ **Security Layers**
+
+```
+┌─────────────────────────────────────────────────┐
+│ Layer 1: Network Security                       │
+│ • DDoS Protection (Cloudflare)                  │
+│ • WAF (Web Application Firewall)                │
+│ • Rate Limiting (IP-based)                      │
+└─────────────────────────────────────────────────┘
+                      │
+                      ▼
+┌─────────────────────────────────────────────────┐
+│ Layer 2: Authentication & Authorization         │
+│ • JWT tokens (RS256)                            │
+│ • OAuth 2.0 / OIDC                              │
+│ • Role-Based Access Control (RBAC)              │
+│ • Multi-Factor Authentication (MFA)             │
+└─────────────────────────────────────────────────┘
+                      │
+                      ▼
+┌─────────────────────────────────────────────────┐
+│ Layer 3: Application Security                   │
+│ • Input Validation & Sanitization               │
+│ • SQL Injection Prevention (Prepared Statements)│
+│ • XSS Protection (Content Security Policy)      │
+│ • CSRF Tokens                                   │
+└─────────────────────────────────────────────────┘
+                      │
+                      ▼
+┌─────────────────────────────────────────────────┐
+│ Layer 4: Data Security                          │
+│ • Encryption at Rest (AES-256)                  │
+│ • Encryption in Transit (TLS 1.3)               │
+│ • PII Data Masking                              │
+│ • Secure Key Management (AWS KMS / Vault)       │
+└─────────────────────────────────────────────────┘
+                      │
+                      ▼
+┌─────────────────────────────────────────────────┐
+│ Layer 5: Infrastructure Security                │
+│ • VPC Isolation                                 │
+│ • Security Groups / Network Policies            │
+│ • Secrets Management (HashiCorp Vault)          │
+│ • Regular Security Patches                      │
+└─────────────────────────────────────────────────┘
+```
+
+### 🔑 **Authentication Flow**
+
+```
+1. User Login Request
+   │
+   ├─→ Username/Password or OAuth
+   │
+   ▼
+2. Verify Credentials
+   │
+   ├─ ✅ Valid → Generate JWT Token
+   │  │
+   │  ├─ Token contains:
+   │  │  • user_id
+   │  │  • roles: ["customer", "verified"]
+   │  │  • exp: 1 hour
+   │  │  • Signed with RS256 private key
+   │  │
+   │  └─→ Return: { access_token, refresh_token }
+   │
+   └─ ❌ Invalid → Return 401 Unauthorized
+
+3. Subsequent Requests
+   │
+   ├─→ Include: Authorization: Bearer <jwt_token>
+   │
+   ▼
+4. API Gateway validates token
+   │
+   ├─ Verify signature with public key
+   ├─ Check expiration
+   ├─ Extract user info
+   │
+   └─→ Forward request with user context
+```
+
+### 🔒 **PCI DSS Compliance**
+
+```yaml
+Payment Data Handling:
+  Card Data Storage: NEVER stored
+  Tokenization: Payment gateway (Stripe/PayPal)
+  PCI Scope: Reduced (SAQ-A)
+  
+  Security Requirements:
+    - TLS 1.3 for all payment communication
+    - No logging of card numbers
+    - Regular security audits
+    - Penetration testing (quarterly)
+    - Employee training
+```
+
+### 🕵️ **Audit Logging**
+
+```python
+# Every critical action is logged
+def create_audit_log(action, user_id, resource, details):
+    log_entry = {
+        "timestamp": datetime.utcnow(),
+        "action": action,  # "reservation_created", "payment_processed"
+        "user_id": user_id,
+        "resource_type": resource,  # "seat", "order"
+        "resource_id": details.get("resource_id"),
+        "ip_address": request.remote_addr,
+        "user_agent": request.headers.get("User-Agent"),
+        "status": details.get("status"),  # "success", "failed"
+        "metadata": details
+    }
+    
+    # Store in append-only log
+    audit_db.insert(log_entry)
+    
+    # Also send to SIEM (Security Information and Event Management)
+    siem.send(log_entry)
+```
+
+### 🚨 **Intrusion Detection**
+
+```yaml
+Monitoring:
+  - Failed login attempts (> 5 in 5 min) → Alert + IP block
+  - Unusual API patterns → Machine learning anomaly detection
+  - Privilege escalation attempts → Immediate alert
+  - SQL injection attempts → Auto-block + notify security team
+  
+Tools:
+  - Fail2Ban (IP blocking)
+  - OSSEC (Host-based IDS)
+  - Suricata (Network IDS)
+  - Wazuh (Security monitoring)
+```
+
+---
+
+## 📚 Technology Stack
+
+### 🎨 **Frontend**
+
+```yaml
+Web Application:
+  Framework: React 18 / Next.js 14
+  State Management: Redux Toolkit / Zustand
+  UI Library: Material-UI / Tailwind CSS
+  Real-time: Socket.IO client
+  Maps: SVG.js for seat maps
+  
+Mobile Apps:
+  iOS: Swift / SwiftUI
+  Android: Kotlin / Jetpack Compose
+  Cross-platform: React Native / Flutter
+  
+PWA:
+  Service Workers for offline support
+  Push Notifications (Web Push API)
+```
+
+### ⚙️ **Backend**
+
+```yaml
+API Services:
+  Language: Node.js (TypeScript) / Go / Python
+  Framework: Express.js / Fastify / Gin / FastAPI
+  API Standard: REST + GraphQL
+  Real-time: WebSocket (Socket.IO / ws)
+  
+Microservices:
+  - Catalog Service (Node.js)
+  - Seat Map Service (Go - high performance)
+  - Reservation Service (Go - concurrency)
+  - Payment Service (Node.js - Stripe SDK)
+  - Notification Service (Python - Celery)
+  - Analytics Service (Python - data processing)
+```
+
+### 🗄️ **Databases**
+
+```yaml
+Primary Database:
+  Type: PostgreSQL 15
+  Configuration: Sharded (16 shards)
+  Replication: Master-Slave (streaming)
+  Backup: Daily full + hourly incremental
+  
+Cache:
+  Type: Redis 7 Cluster
+  Nodes: 8 (master-replica pairs)
+  Persistence: RDB snapshots + AOF
+  Use Cases: Sessions, rate limiting, pub/sub
+  
+Search Engine:
+  Type: Elasticsearch 8
+  Use: Event search, autocomplete
+  
+Time-Series:
+  Type: InfluxDB / TimescaleDB
+  Use: Metrics, analytics
+  
+Document Store:
+  Type: MongoDB
+  Use: Audit logs, user preferences
+```
+
+### 📨 **Message Queue**
+
+```yaml
+Event Streaming:
+  Type: Apache Kafka
+  Partitions: 32
+  Replication Factor: 3
+  Use Cases:
+    - Reservation events
+    - Payment events
+    - Analytics data
+    - Audit logs
+    
+Task Queue:
+  Type: RabbitMQ / Redis Queue
+  Use Cases:
+    - Email sending
+    - Ticket generation
+    - Report generation
+```
+
+### ☁️ **Infrastructure**
+
+```yaml
+Cloud Provider: AWS / GCP / Azure
+
+Compute:
+  - Kubernetes (EKS / GKE / AKS)
+  - EC2 / Compute Engine (worker nodes)
+  - Lambda / Cloud Functions (serverless tasks)
+  
+Networking:
+  - Load Balancer (ALB / Cloud Load Balancing)
+  - CDN (CloudFront / Cloudflare)
+  - VPC / Virtual Network
+  
+Storage:
+  - S3 / Cloud Storage (tickets, assets)
+  - EBS / Persistent Disks (databases)
+  
+Monitoring:
+  - CloudWatch / Cloud Monitoring
+  - Prometheus + Grafana
+  - Datadog / New Relic
+  - Sentry (error tracking)
+```
+
+### 🔧 **DevOps Tools**
+
+```yaml
+Container Orchestration:
+  - Kubernetes 1.28+
+  - Helm (package manager)
+  - Kustomize (configuration)
+  
+CI/CD:
+  - GitHub Actions / GitLab CI
+  - ArgoCD (GitOps)
+  - Terraform (IaC)
+  
+Security:
+  - Trivy (container scanning)
+  - SonarQube (code quality)
+  - HashiCorp Vault (secrets)
+  - cert-manager (SSL certificates)
+```
+
+---
+
+## 🎓 Learning Resources
+
+### 📖 **System Design**
+
+#### **Books**
+- 📘 *Designing Data-Intensive Applications* by Martin Kleppmann
+- 📘 *System Design Interview* (Vol 1 & 2) by Alex Xu
+- 📘 *Building Microservices* by Sam Newman
+- 📘 *Database Internals* by Alex Petrov
+
+#### **Online Courses**
+- 🎓 [Grokking the System Design Interview](https://www.educative.io/courses/grokking-the-system-design-interview)
+- 🎓 [MIT 6.824: Distributed Systems](https://pdos.csail.mit.edu/6.824/)
+- 🎓 [AWS Solutions Architect Professional](https://aws.amazon.com/certification/certified-solutions-architect-professional/)
+
+#### **Case Studies**
+- 📄 [Ticketmaster Architecture](https://www.infoq.com/presentations/ticketmaster-architecture/)
+- 📄 [BookMyShow Tech Blog](https://blog.bookmyshow.com/)
+- 📄 [Uber's Schemaless Datastore](https://eng.uber.com/schemaless-part-one/)
+
+### 🔗 **Relevant Articles**
+
+- [How We Built a Distributed Locking System](https://redis.io/docs/manual/patterns/distributed-locks/)
+- [The Saga Pattern Explained](https://microservices.io/patterns/data/saga.html)
+- [Optimistic vs Pessimistic Locking](https://martin.kleppmann.com/2016/02/08/how-to-do-distributed-locking.html)
+- [CAP Theorem in Practice](https://www.infoq.com/articles/cap-twelve-years-later-how-the-rules-have-changed/)
+
+### 🛠️ **Hands-On Practice**
+
+```yaml
+Try Building:
+  1. Simplified Ticket Booking API
+     - Start with single-node setup
+     - Implement basic CRUD
+     - Add optimistic locking
+     
+  2. Add Caching Layer
+     - Integrate Redis
+     - Implement cache-aside pattern
+     - Test performance improvements
+     
+  3. Implement TTL Expiration
+     - Background worker
+     - Seat release automation
+     - Idempotency handling
+     
+  4. Payment Integration
+     - Stripe test mode
+     - Webhook handling
+     - Refund logic
+     
+  5. Scale to Distributed
+     - Add load balancer
+     - Database sharding
+     - Horizontal pod autoscaling
+```
+
+
+## 🤝 Contributing
+
+We welcome contributions! Here's how you can help:
+
+```bash
+# 1. Fork the repository
+# 2. Create a feature branch
+git checkout -b feature/amazing-feature
+
+# 3. Make your changes
+git add .
+git commit -m "Add amazing feature"
+
+# 4. Push to your fork
+git push origin feature/amazing-feature
+
+# 5. Open a Pull Request
+```
+
+### 📋 **Contribution Guidelines**
+- Follow the existing code style
+- Write unit tests for new features
+- Update documentation
+- Keep commits atomic and well-described
+
+---
+
+## 📄 License
+
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+
+---
+
+## 💡 Acknowledgments
+
+This system design is inspired by real-world ticketing platforms:
+- 🎫 **Ticketmaster** - Global ticketing leader
+- 🎬 **BookMyShow** - India's largest entertainment ticketing platform
+- 🎵 **Eventbrite** - Event management and ticketing
+- ✈️ **Airline Reservation Systems** - Classic distributed booking challenges
+
+Special thanks to the open-source community for tools and libraries that make projects like this possible.
+
+---
+
+## 📞 Contact
+
+**Ashmit Thakur**  
+📧 Email: [Your Email]  
+💼 LinkedIn: [Your LinkedIn]  
+🐙 GitHub: [@AshmitThakur23](https://github.com/AshmitThakur23)
+
+---
+
+<div align="center">
+
+### ⭐ Star this repository if you found it helpful!
+
+**Built with ❤️ for learning distributed systems**
+
+[![GitHub stars](https://img.shields.io/github/stars/AshmitThakur23/Scalable-Event-Ticketing-and-Seat-Allocation-System?style=social)](https://github.com/AshmitThakur23/Scalable-Event-Ticketing-and-Seat-Allocation-System)
+[![GitHub forks](https://img.shields.io/github/forks/AshmitThakur23/Scalable-Event-Ticketing-and-Seat-Allocation-System?style=social)](https://github.com/AshmitThakur23/Scalable-Event-Ticketing-and-Seat-Allocation-System)
+
+</div>
